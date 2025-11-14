@@ -82,7 +82,7 @@ class AIONostrDVM:
     This is tested against the Amethyst and Primal.
     """
     CONNECTION_TIMEOUT_SEC = 30  # this is a server application so we're not in a hurry
-    ANNOUNCEMENT_INTERVAL_SEC = 1800
+    ANNOUNCEMENT_INTERVAL_SEC = 3600
 
     def __init__(
             self, *,
@@ -155,7 +155,7 @@ class AIONostrDVM:
         ssl_context = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH, cafile=ca_path)
         self.logger.info(f"connecting to nostr relays")
         manager_logger = logging.getLogger('dvm-relay-manager')
-        manager_logger.setLevel('INFO')
+        # manager_logger.setLevel('INFO')
         try:
             async with aionostr.Manager(
                 relays=self.relays,
@@ -219,7 +219,7 @@ class AIONostrDVM:
             event = nip89_info.to_event(
                 service_event_kind=self.service_event_kind,
                 pubkey_hex=self._private_key.public_key.hex(),
-                expiry_ts=int(time.time()) + self.ANNOUNCEMENT_INTERVAL_SEC,
+                expiry_ts=int(time.time()) + self.ANNOUNCEMENT_INTERVAL_SEC * 2,
             )
             assert isinstance(event, NostrEvent), event
             event.sign(self._private_key.hex())
