@@ -155,7 +155,6 @@ class AIONostrDVM:
         ssl_context = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH, cafile=ca_path)
         self.logger.info(f"connecting to nostr relays")
         manager_logger = logging.getLogger('dvm-relay-manager')
-        # manager_logger.setLevel('INFO')
         try:
             async with aionostr.Manager(
                 relays=self.relays,
