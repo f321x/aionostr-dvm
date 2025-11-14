@@ -49,12 +49,13 @@ class NIP89Info:
     def to_event(
             self,
             service_event_kind: int,
+            dvm_id: str,
             pubkey_hex: str,
             expiry_ts: Optional[int] = None
     ) -> NostrEvent:
         d_tag = [
             'd',
-            sha256(f"{service_event_kind}{pubkey_hex}".encode('utf-8')).hexdigest()[:16],
+            dvm_id,
         ]
         k_tag = ['k', str(service_event_kind)]
         tags = [d_tag, k_tag]
@@ -118,6 +119,14 @@ class AIONostrDVM:
         except asyncio.TimeoutError:
             return
 
+    async def handle_request(self, request: NostrEvent) -> Optional[NostrEvent]:
+        # to be implemented by child, if response is returned it will be broadcast
+        raise NotImplementedError()
+
+    async def get_announcement_info(self) -> Optional[NIP89Info]:
+        # to be implemented by child, NIP89
+        raise NotImplementedError()
+
     def _on_main_task_done(self, task: asyncio.Task) -> None:
         if task.cancelled():
             return
@@ -139,8 +148,9 @@ class AIONostrDVM:
                     tg.create_task(self._subscribe_to_requests())
                     tg.create_task(self._broadcast_nip89_announcement_event())
                     self._initialized.set()
-                    await asyncio.sleep(10)
+                    await asyncio.sleep(10)  # sleep a bit, stuff below is not as important
                     tg.create_task(self._broadcast_nip65_relay_announcement_event())
+                    tg.create_task(self._broadcast_heartbeat_event())
             except* ValueError as eg:
                 # re-raise the first exception happening in the taskgroup
                 self.logger.exception("Task group failed")
@@ -217,6 +227,7 @@ class AIONostrDVM:
                 continue
             event = nip89_info.to_event(
                 service_event_kind=self.service_event_kind,
+                dvm_id=self.dvm_id(),
                 pubkey_hex=self._private_key.public_key.hex(),
                 expiry_ts=int(time.time()) + self.ANNOUNCEMENT_INTERVAL_SEC * 2,
             )
@@ -272,13 +283,28 @@ class AIONostrDVM:
         except Exception:
             self.logger.error(f"failed to broadcast nip65 relay list")
 
-    async def handle_request(self, request: NostrEvent) -> Optional[NostrEvent]:
-        # to be implemented by child, if response is returned it will be broadcast
-        raise NotImplementedError()
+    async def _broadcast_heartbeat_event(self):
+        """this is not in the current NIP-90 spec but in some pr. however other dvms seem to broadcast it too."""
+        while True:
+            await asyncio.sleep(300)
+            if not await self.get_announcement_info():
+                continue
+            heartbeat_event = NostrEvent(
+                kind=11998,
+                content='',
+                tags=[['status', 'ready'], ['d', self.dvm_id()]],
+                expiration_ts=int(time.time()) + 300,
+                pubkey=self.pubkey,
+            )
+            heartbeat_event.sign(self._private_key.hex())
+            try:
+                await self._relay_manager.add_event(heartbeat_event)
+                self.logger.debug(f"broadcasted nip65 relay announcement")
+            except Exception:
+                self.logger.error(f"failed to broadcast nip65 relay list")
 
-    async def get_announcement_info(self) -> Optional[NIP89Info]:
-        # to be implemented by child, NIP89
-        raise NotImplementedError()
+    def dvm_id(self) -> str:
+        return sha256(f"{self.service_event_kind}{self.pubkey}".encode('utf-8')).hexdigest()[:16]
 
 
 def normalize_websocket_urls(urls: Sequence[str]) -> list[str]:
