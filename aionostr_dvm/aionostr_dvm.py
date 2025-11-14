@@ -264,6 +264,7 @@ class AIONostrDVM:
             content='',
             tags=tags,
             expiration_ts=int(time.time()) + 1209600,  # 2 weeks
+            pubkey=self.pubkey,
         )
         nip65_event.sign(self._private_key.hex())
         try:
