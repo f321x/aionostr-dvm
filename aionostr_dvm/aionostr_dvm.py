@@ -299,9 +299,9 @@ class AIONostrDVM:
             heartbeat_event.sign(self._private_key.hex())
             try:
                 await self._relay_manager.add_event(heartbeat_event)
-                self.logger.debug(f"broadcasted nip65 relay announcement")
+                self.logger.debug(f"broadcasted 11998 heartbeat event")
             except Exception:
-                self.logger.error(f"failed to broadcast nip65 relay list")
+                self.logger.error(f"failed to broadcast 11998 heartbeat event")
 
     def dvm_id(self) -> str:
         return sha256(f"{self.service_event_kind}{self.pubkey}".encode('utf-8')).hexdigest()[:16]
