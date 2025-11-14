@@ -9,3 +9,9 @@ and might not work with other clients. Feel free to open PRs to improve things.
 
 ```bash
 pip install aionostr-dvm
+```
+
+## Usage
+
+Check out this repository for an example of how to use this library:
+https://github.com/f321x/notarized-notes-dvm
