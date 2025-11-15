@@ -12,7 +12,7 @@ from typing import Optional, AsyncGenerator, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 
-import electrum_aionostr as aionostr
+import electrum_aionostr
 from electrum_aionostr.event import Event as NostrEvent
 from electrum_aionostr.key import PrivateKey
 
@@ -103,14 +103,14 @@ class AIONostrDVM:
         self.announcement_interval_sec = announcement_interval_sec
         self.taskgroup = None  # type: Optional[asyncio.TaskGroup]
         self._main_task = None  # type: Optional[asyncio.Task]
-        self._relay_manager = None  # type: Optional[aionostr.Manager]
+        self._relay_manager = None  # type: Optional[electrum_aionostr.Manager]
         self._initialized = asyncio.Event()
 
     async def __aenter__(self) -> 'AIONostrDVM':
         self._main_task = asyncio.create_task(self.main_loop())
         self._main_task.add_done_callback(self._on_main_task_done)
         await asyncio.wait_for(self._initialized.wait(), timeout=self.CONNECTION_TIMEOUT_SEC + 5)
-        assert isinstance(self._relay_manager, aionostr.Manager)
+        assert isinstance(self._relay_manager, electrum_aionostr.Manager)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -119,13 +119,20 @@ class AIONostrDVM:
         except asyncio.TimeoutError:
             return
 
-    async def handle_request(self, request: NostrEvent) -> Optional[NostrEvent]:
-        # to be implemented by child, if response is returned it will be broadcast
-        raise NotImplementedError()
+    async def handle_request(self, request: electrum_aionostr.event.Event) -> Optional[electrum_aionostr.event.Event]:
+        """To be implemented by child. Takes the event request and processes it.
+        If a response needs to be sent, return the response which will get signed and broadcast."""
+        raise NotImplementedError("child must implement handle_request()")
 
     async def get_announcement_info(self) -> Optional[NIP89Info]:
-        # to be implemented by child, NIP89
-        raise NotImplementedError()
+        """To be implemented by child. If a NIP89 announcement should be broadcast this function
+        needs to return NIP89Info, otherwise it should return None"""
+        raise NotImplementedError("child must implement get_announcement_info()")
+
+    async def get_kind0_profile_event(self) -> Optional[electrum_aionostr.event.Event]:
+        """To be implemented by child. If the dvm should publish a kind0 profile event this function
+        should return a kind 0 event object, otherwise it should return None"""
+        raise NotImplementedError("child must implement get_kind0_profile_event()")
 
     def _on_main_task_done(self, task: asyncio.Task) -> None:
         if task.cancelled():
@@ -148,8 +155,11 @@ class AIONostrDVM:
                     tg.create_task(self._subscribe_to_requests())
                     tg.create_task(self._broadcast_nip89_announcement_event())
                     self._initialized.set()
-                    await asyncio.sleep(10)  # sleep a bit, stuff below is not as important
+                    # prevent posting all announcements at once to not get rate limited
+                    await asyncio.sleep(10)
                     tg.create_task(self._broadcast_nip65_relay_announcement_event())
+                    await asyncio.sleep(10)
+                    tg.create_task(self._broadcast_kind0_profile_event())
                     tg.create_task(self._broadcast_heartbeat_event())
             except* ValueError as eg:
                 # re-raise the first exception happening in the taskgroup
@@ -160,13 +170,13 @@ class AIONostrDVM:
                 self.logger.debug(f"taskgroup stopped")
 
     @asynccontextmanager
-    async def _start_relay_manager(self) -> AsyncGenerator[aionostr.Manager, None]:
+    async def _start_relay_manager(self) -> AsyncGenerator[electrum_aionostr.Manager, None]:
         ca_path = certifi.where()
         ssl_context = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH, cafile=ca_path)
         self.logger.info(f"connecting to nostr relays")
         manager_logger = logging.getLogger('dvm-relay-manager')
         try:
-            async with aionostr.Manager(
+            async with electrum_aionostr.Manager(
                 relays=self.relays,
                 private_key=self._private_key.hex(),
                 ssl_context=ssl_context,
@@ -255,7 +265,7 @@ class AIONostrDVM:
             # connect to clients relays and send response to them as well
             if new_relays:
                 self.logger.debug(f"connecting to their relays: {new_relays=}")
-                await aionostr.add_event(
+                await electrum_aionostr.add_event(
                     relays=new_relays,
                     event=response.to_json_object(),
                     private_key=self._private_key.hex(),
@@ -288,7 +298,7 @@ class AIONostrDVM:
         while True:
             await asyncio.sleep(300)
             if not await self.get_announcement_info():
-                continue
+                continue  # dvm doesn't want to be public
             heartbeat_event = NostrEvent(
                 kind=11998,
                 content='',
@@ -302,6 +312,20 @@ class AIONostrDVM:
                 self.logger.debug(f"broadcasted 11998 heartbeat event")
             except Exception:
                 self.logger.error(f"failed to broadcast 11998 heartbeat event")
+
+    async def _broadcast_kind0_profile_event(self):
+        """Broadcast the kind0 profile event once"""
+        profile_event = await self.get_kind0_profile_event()
+        while not profile_event:
+            await asyncio.sleep(30)
+            profile_event = await self.get_kind0_profile_event()
+        assert profile_event.kind == 0
+        profile_event.sign(self._private_key.hex())
+        try:
+            await self._relay_manager.add_event(profile_event)
+            self.logger.debug(f"broadcasted kind 0 profile event")
+        except Exception:
+            self.logger.error(f"failed to broadcast kind 0 profile event")
 
     def dvm_id(self) -> str:
         return sha256(f"{self.service_event_kind}{self.pubkey}".encode('utf-8')).hexdigest()[:16]
